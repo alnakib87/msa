@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Accounting App</title>
+<style type="text/css">
+/* styles.css */
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background-color: #f4f4f4;
+}
+
+header {
+    background-color: #333;
+    color: #fff;
+    padding: 10px 0;
+    width: 100%;
+    text-align: center;
+}
+
+main {
+    margin: 20px;
+}
+
+section {
+    margin-bottom: 20px;
+}
+
+label {
+    margin-right: 10px;
+}
+
+input[type="number"] {
+    padding: 5px;
+    margin-right: 10px;
+}
+
+button {
+    padding: 5px 10px;
+    cursor: pointer;
+}
+
+ul {
+    list-style: none;
+    padding: 0;
+}
+
+li {
+    padding: 5px;
+    background-color: #fff;
+    margin-bottom: 5px;
+    border: 1px solid #ddd;
+}
+
+
+</style>
+</head>
+<body>
+    <header>
+        <h1>Accounting App</h1>
+    </header>
+    <main>
+        <section>
+            <label for="amount">Amount:</label>
+            <input type="number" id="amount" placeholder="Enter amount">
+            <button onclick="addTransaction()">Add Transaction</button>
+        </section>
+        <section>
+            <h2>Transactions</h2>
+            <ul id="transactionList"></ul>
+        </section>
+    </main>
+<script type="text/javascript">
+let localDb;
+
+// إعداد IndexedDB
+async function initDB() {
+    const request = indexedDB.open('local_transactions', 1);
+
+    request.onupgradeneeded = (event) => {
+        const db = event.target.result;
+        db.createObjectStore('transactions', { keyPath: 'id', autoIncrement: true });
+    };
+
+    request.onsuccess = (event) => {
+        localDb = event.target.result;
+        displayTransactions();
+    };
+
+    request.onerror = (event) => {
+        console.error('Error opening IndexedDB:', event.target.error);
+    };
+}
+
+// إضافة معاملة
+async function addTransaction() {
+    const amount = document.getElementById("amount").value;
+    if (!amount) {
+        alert('Please enter an amount');
+        return;
+    }
+
+    const transaction = { amount, date: new Date().toISOString() };
+
+    // تخزين البيانات في IndexedDB
+    const tx = localDb.transaction('transactions', 'readwrite');
+    tx.objectStore('transactions').add(transaction);
+    tx.oncomplete = () => {
+        console.log('Transaction added to IndexedDB');
+        displayTransactions();
+        syncData(); // محاولة مزامنة البيانات مع الخادم عند الإضافة
+    };
+    tx.onerror = (event) => console.error('Error storing transaction:', event.target.error);
+}
+
+// عرض المعاملات من IndexedDB
+async function displayTransactions() {
+    const transactionList = document.getElementById("transactionList");
+    transactionList.innerHTML = '';
+
+    const transactions = [];
+    const tx = localDb.transaction('transactions', 'readonly');
+    const store = tx.objectStore('transactions');
+    store.openCursor().onsuccess = (event) => {
+        const cursor = event.target.result;
+        if (cursor) {
+            transactions.push(cursor.value);
+            cursor.continue();
+        } else {
+            transactions.forEach(tx => {
+                const listItem = document.createElement("li");
+                listItem.textContent = `Amount: ${tx.amount} (Date: ${new Date(tx.date).toLocaleDateString()})`;
+                transactionList.appendChild(listItem);
+            });
+        }
+    };
+
+    // عرض المعاملات من الخادم عند توفر الإنترنت
+    if (navigator.onLine) {
+        try {
+            const response = await fetch('https://example.com/api/transactions');
+            const serverTransactions = await response.json();
+            serverTransactions.forEach(tx => {
+                const listItem = document.createElement("li");
+                listItem.textContent = `Amount: ${tx.amount} (Date: ${new Date(tx.date).toLocaleDateString()})`;
+                transactionList.appendChild(listItem);
+            });
+        } catch (error) {
+            console.error('Error fetching transactions from server:', error);
+        }
+    }
+}
+
+// مزامنة البيانات عند توفر الإنترنت
+async function syncData() {
+    if (!navigator.onLine) {
+        return; // لا تقم بالمزامنة إذا لم يكن هناك اتصال
+    }
+
+    const tx = localDb.transaction('transactions', 'readonly');
+    const store = tx.objectStore('transactions');
+    const allTransactions = [];
+    store.openCursor().onsuccess = async (event) => {
+        const cursor = event.target.result;
+        if (cursor) {
+            allTransactions.push(cursor.value);
+            cursor.continue();
+        } else {
+            try {
+                for (const transaction of allTransactions) {
+                    await fetch('https://example.com/api/add-transaction', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(transaction),
+                    });
+                    // حذف المعاملة من IndexedDB بعد الإرسال
+                    const tx = localDb.transaction('transactions', 'readwrite');
+                    tx.objectStore('transactions').delete(transaction.id);
+                }
+                displayTransactions();
+            } catch (error) {
+                console.error('Error syncing data:', error);
+            }
+        }
+    };
+}
+
+// تحميل قاعدة البيانات عند تحميل الصفحة
+initDB();
+
+
+</script>
+</body>
+</html>
